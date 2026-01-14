@@ -6,7 +6,7 @@ from datetime import datetime
 # --- Page Config ---
 st.set_page_config(page_title="Mantra OM Transaction Explorer", layout="wide")
 
-st.title("Mantra Blockchain Transaction Explorer")
+st.title("Mantra OM Transaction Explorer")
 st.markdown("""
 This app fetches **OM Coin Balance History** directly from the Mantra Chain API.
 """)
