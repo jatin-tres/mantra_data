@@ -35,7 +35,7 @@ def scrape_mantra_data(address):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,720") # Smaller window saves RAM
+    options.add_argument("--window-size=1280,720") 
     
     if os.path.exists("/usr/bin/chromium"):
         options.binary_location = "/usr/bin/chromium"
@@ -75,7 +75,7 @@ def scrape_mantra_data(address):
             driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {view: window, bubbles:true, cancelable: true}))", toggle_btn)
             time.sleep(1.5) # Allow DOM to update
         except:
-            pass # Continue even if toggle fails
+            pass 
 
         # CAPTURE HTML AND EXIT IMMEDIATELY
         html_content = driver.page_source
