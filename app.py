@@ -48,14 +48,15 @@ def fetch_mantra_data(address):
             txn_hash = item.get('transaction_hash')
             txn_link = f"https://blockscout.mantrascan.io/tx/{txn_hash}" if txn_hash else ""
             
-            # 3. Timestamp Logic
+            # 3. Timestamp Logic (Updated Format)
             raw_time = item.get('timestamp') or item.get('block_timestamp') or item.get('time')
             
             if raw_time:
                 try:
                     # Try parsing ISO format
                     dt_obj = datetime.fromisoformat(str(raw_time).replace('Z', '+00:00'))
-                    timestamp = dt_obj.strftime("%b %d, %Y %I:%M %p")
+                    # NEW FORMAT: MM/DD/YYYY HH:MM:SS
+                    timestamp = dt_obj.strftime("%m/%d/%Y %H:%M:%S")
                 except:
                     timestamp = str(raw_time)
             else:
@@ -109,14 +110,13 @@ if st.button("Fetch Transactions"):
                 # --- CALCULATIONS ---
                 inflow_count = len(df[df['Direction'] == 'Inflow'])
                 outflow_count = len(df[df['Direction'] == 'Outflow'])
-                net_balance = df['Amount'].sum() # Sum of column F
+                net_balance = df['Amount'].sum()
                 
                 # --- METRICS DISPLAY ---
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Total Transactions", len(df))
                 c2.metric("Inflows", inflow_count)
                 c3.metric("Outflows", outflow_count)
-                # Display the Net Balance with 4 decimal places
                 c4.metric("Net Balance", f"{net_balance:,.4f} OM")
                 
                 # --- STYLING ---
