@@ -44,18 +44,17 @@ def fetch_mantra_data(address):
             # 1. Block
             block = item.get('block_number')
             
-            # 2. Txn Hash & Link
+            # 2. Txn Hash (Fetched directly from API, so Link is not needed for sourcing)
             txn_hash = item.get('transaction_hash')
-            txn_link = f"https://blockscout.mantrascan.io/tx/{txn_hash}" if txn_hash else ""
             
-            # 3. Timestamp Logic (Updated Format)
+            # 3. Timestamp Logic (Format: MM/DD/YYYY HH:MM:SS)
             raw_time = item.get('timestamp') or item.get('block_timestamp') or item.get('time')
             
             if raw_time:
                 try:
                     # Try parsing ISO format
                     dt_obj = datetime.fromisoformat(str(raw_time).replace('Z', '+00:00'))
-                    # NEW FORMAT: MM/DD/YYYY HH:MM:SS
+                    # Updated Format: MM/DD/YYYY HH:MM:SS
                     timestamp = dt_obj.strftime("%m/%d/%Y %H:%M:%S")
                 except:
                     timestamp = str(raw_time)
@@ -80,11 +79,11 @@ def fetch_mantra_data(address):
             processed_data.append({
                 "Block": block,
                 "Txn Hash": txn_hash,
-                "Txn Link": txn_link,
+                # "Txn Link" removed as requested
                 "Timestamp": timestamp,
                 "Direction": direction,
-                "Amount": raw_delta,           # Numeric for calculation
-                "Running Balance OM": raw_value # Numeric
+                "Amount": raw_delta,           
+                "Running Balance OM": raw_value 
             })
             
         return pd.DataFrame(processed_data)
@@ -135,9 +134,9 @@ if st.button("Fetch Transactions"):
                           "Running Balance OM": "{:,.8f}"
                       }),
                     column_config={
-                        "Txn Link": st.column_config.LinkColumn("Txn Link"),
                         "Block": st.column_config.NumberColumn("Block", format="%d"),
                         "Timestamp": st.column_config.TextColumn("Timestamp"),
+                        "Txn Hash": st.column_config.TextColumn("Txn Hash"),
                     },
                     use_container_width=True
                 )
