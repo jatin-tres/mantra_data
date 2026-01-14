@@ -58,21 +58,17 @@ def scrape_mantra_data(address):
     try:
         driver = webdriver.Chrome(service=service, options=options)
         
-        # 2. Navigate
+        # 2. Navigate (Silent)
         url = f"https://blockscout.mantrascan.io/address/{address}?tab=coin_balance_history"
-        status_placeholder = st.empty()
-        status_placeholder.info(f"Navigating to {url}...")
-        
         driver.get(url)
+        
         wait = WebDriverWait(driver, 25)
 
-        # 3. Wait for Table
-        status_placeholder.info("Waiting for table data...")
+        # 3. Wait for Table (Silent)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
         
-        # 4. Toggle Timestamp (Age -> Date)
+        # 4. Toggle Timestamp (Silent)
         try:
-            status_placeholder.info("Toggling timestamp format...")
             # Target the SVG specifically inside the 'Timestamp' header
             toggle_btn = wait.until(EC.element_to_be_clickable(
                 (By.XPATH, "//th[contains(., 'Timestamp')]//*[local-name()='svg']")
@@ -80,12 +76,11 @@ def scrape_mantra_data(address):
             # Javascript click is reliable for SVGs
             driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {view: window, bubbles:true, cancelable: true}))", toggle_btn)
             time.sleep(2) # Wait for text update
-        except Exception as e:
-            st.warning("Note: Could not toggle timestamp. It might already be in Date format.")
+        except Exception:
+            # Fail silently on toggle if it doesn't work (data will still load)
+            pass
 
         # 5. Extract Data
-        status_placeholder.info("Extracting data...")
-        
         # Re-fetch rows
         rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
         
@@ -148,12 +143,10 @@ def scrape_mantra_data(address):
                 "Direction": direction
             })
         
-        status_placeholder.success(f"Successfully scraped {len(data)} transactions!")
-        
-        # Create DataFrame and Reorder Columns
+        # Create DataFrame
         df = pd.DataFrame(data)
         if not df.empty:
-            # New Requested Order: 
+            # Final Requested Order: 
             # Block → Txn Hash → Txn Link → Timestamp → Direction → Amount → Running Balance OM
             df = df[[
                 "Block", 
@@ -179,6 +172,7 @@ if st.button("Fetch Transactions"):
     if not wallet_address:
         st.warning("Please enter a wallet address.")
     else:
+        # Only showing "Processing..." as requested
         with st.spinner("Processing..."):
             df = scrape_mantra_data(wallet_address)
             
