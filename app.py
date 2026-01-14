@@ -66,7 +66,7 @@ def scrape_mantra_data(address):
         driver.get(url)
         wait = WebDriverWait(driver, 25)
 
-        # 3. Wait for Table to Load
+        # 3. Wait for Table
         status_placeholder.info("Waiting for table data...")
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
         
@@ -86,7 +86,7 @@ def scrape_mantra_data(address):
         # 5. Extract Data
         status_placeholder.info("Extracting data...")
         
-        # Re-fetch rows to ensure we get the updated DOM
+        # Re-fetch rows
         rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
         
         data = []
@@ -102,17 +102,14 @@ def scrape_mantra_data(address):
             block = cols[0].get_attribute("textContent").strip()
             
             # -- Col 1 & 2: Txn Link & FULL HASH --
-            # We get the link first, then extract the hash from the link URL
             try:
                 txn_elem = cols[1].find_element(By.TAG_NAME, "a")
                 txn_link = txn_elem.get_attribute("href")
                 
-                # Logic: Extract Hash from Link (e.g., .../tx/0x123...)
+                # Logic: Extract Hash from Link
                 if "/tx/" in txn_link:
-                    # Splits by '/tx/' and takes the last part (the hash)
                     txn_hash = txn_link.split("/tx/")[-1]
                 else:
-                    # Fallback if link format is unexpected
                     txn_hash = txn_elem.get_attribute("textContent").strip()
             except:
                 txn_hash = cols[1].get_attribute("textContent").strip()
@@ -121,46 +118,54 @@ def scrape_mantra_data(address):
             # -- Col 3: Timestamp --
             timestamp = cols[2].get_attribute("textContent").strip()
             
-            # -- Col 4: Balance --
+            # -- Col 4: Balance (Now Running Balance OM) --
             balance = cols[3].get_attribute("textContent").strip()
             
-            # -- Col 5: Amount (formerly Delta) & Direction Logic --
+            # -- Col 5: Amount (formerly Delta) --
             delta_cell = cols[4]
             raw_delta_text = delta_cell.get_attribute("textContent").strip()
             
-            # Cleaning the amount string: remove commas, currency text, keep only numbers, dots and minus sign
-            # Regex removes anything that is NOT a digit, a dot, or a minus sign
+            # Clean Amount Logic
             clean_amount_str = re.sub(r'[^\d.-]', '', raw_delta_text)
             
             direction = "Neutral"
-            amount_val = 0.0
-            
             try:
                 amount_val = float(clean_amount_str)
-                
-                # Requested Logic: < 0 is Outflow, > 0 is Inflow
                 if amount_val < 0:
                     direction = "Outflow"
                 elif amount_val > 0:
                     direction = "Inflow"
-                else:
-                    direction = "Neutral"
             except ValueError:
-                # Keep neutral if conversion fails
                 pass
 
             data.append({
                 "Block": block,
-                "Txn Hash": txn_hash,  # Now the Full Hash
+                "Txn Hash": txn_hash,
                 "Txn Link": txn_link,
                 "Timestamp": timestamp,
-                "Balance OM": balance,
-                "Amount": raw_delta_text, # Renamed from Delta
+                "Running Balance OM": balance,
+                "Amount": raw_delta_text,
                 "Direction": direction
             })
         
         status_placeholder.success(f"Successfully scraped {len(data)} transactions!")
-        return pd.DataFrame(data)
+        
+        # Create DataFrame and Reorder Columns
+        df = pd.DataFrame(data)
+        if not df.empty:
+            # New Requested Order: 
+            # Block → Txn Hash → Txn Link → Timestamp → Direction → Amount → Running Balance OM
+            df = df[[
+                "Block", 
+                "Txn Hash", 
+                "Txn Link", 
+                "Timestamp", 
+                "Direction",
+                "Amount", 
+                "Running Balance OM"
+            ]]
+            
+        return df
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
@@ -190,9 +195,9 @@ if st.button("Fetch Transactions"):
                 # Style Helper
                 def highlight_row(val):
                     if val == 'Inflow':
-                        return 'color: #00c853; font-weight: bold' # Green
+                        return 'color: #00c853; font-weight: bold' 
                     elif val == 'Outflow':
-                        return 'color: #d50000; font-weight: bold' # Red
+                        return 'color: #d50000; font-weight: bold'
                     return ''
 
                 st.subheader("Transaction Details")
@@ -203,9 +208,9 @@ if st.button("Fetch Transactions"):
                         "Txn Hash": "Txn Hash",
                         "Block": "Block",
                         "Timestamp": "Timestamp",
-                        "Balance OM": "Balance OM",
+                        "Direction": "Direction",
                         "Amount": "Amount",
-                        "Direction": "Direction"
+                        "Running Balance OM": "Running Balance OM"
                     },
                     use_container_width=True
                 )
@@ -219,4 +224,4 @@ if st.button("Fetch Transactions"):
                     mime="text/csv"
                 )
             else:
-                st.error("No data found. The page might have changed or the wallet has no history.")
+                st.error("No data found.")
