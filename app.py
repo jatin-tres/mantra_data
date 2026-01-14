@@ -9,7 +9,7 @@ st.set_page_config(page_title="Mantra Transaction Explorer", layout="wide")
 st.title("Mantra Blockchain Transaction Explorer")
 st.markdown("""
 This app fetches **Coin Balance History** directly from the Mantra Chain API.
-**Note:** If the API does not provide a specific timestamp, the **Block Number** is shown as the reference.
+It calculates the **Net Balance** by summing the amounts of all visible transactions.
 """)
 
 # --- Input Section ---
@@ -48,24 +48,20 @@ def fetch_mantra_data(address):
             txn_hash = item.get('transaction_hash')
             txn_link = f"https://blockscout.mantrascan.io/tx/{txn_hash}" if txn_hash else ""
             
-            # 3. Timestamp Logic (Robust)
-            # We try multiple keys that Blockscout sometimes uses
+            # 3. Timestamp Logic
             raw_time = item.get('timestamp') or item.get('block_timestamp') or item.get('time')
             
             if raw_time:
                 try:
-                    # Try parsing ISO format (e.g., 2026-01-08T13:38:00.000000Z)
+                    # Try parsing ISO format
                     dt_obj = datetime.fromisoformat(str(raw_time).replace('Z', '+00:00'))
                     timestamp = dt_obj.strftime("%b %d, %Y %I:%M %p")
                 except:
-                    # If parsing fails, just use the raw string
                     timestamp = str(raw_time)
             else:
-                # Fallback: If API returns no time, show Block Number
                 timestamp = f"Block #{block}"
 
             # 4. Values (Amount & Balance)
-            # The API returns values in 'Wei', divide by 1e18 for OM
             try:
                 raw_value = float(item.get('value', 0)) / 1e18
                 raw_delta = float(item.get('delta', 0)) / 1e18
@@ -86,8 +82,8 @@ def fetch_mantra_data(address):
                 "Txn Link": txn_link,
                 "Timestamp": timestamp,
                 "Direction": direction,
-                "Amount": raw_delta,           # Keep as number for sorting/styling
-                "Running Balance OM": raw_value # Keep as number for sorting/styling
+                "Amount": raw_delta,           # Numeric for calculation
+                "Running Balance OM": raw_value # Numeric
             })
             
         return pd.DataFrame(processed_data)
@@ -110,16 +106,20 @@ if st.button("Fetch Transactions"):
             elif isinstance(result, pd.DataFrame):
                 df = result
                 
-                # Metrics
+                # --- CALCULATIONS ---
                 inflow_count = len(df[df['Direction'] == 'Inflow'])
                 outflow_count = len(df[df['Direction'] == 'Outflow'])
+                net_balance = df['Amount'].sum() # Sum of column F
                 
-                c1, c2, c3 = st.columns(3)
+                # --- METRICS DISPLAY ---
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Total Transactions", len(df))
                 c2.metric("Inflows", inflow_count)
                 c3.metric("Outflows", outflow_count)
+                # Display the Net Balance with 4 decimal places
+                c4.metric("Net Balance", f"{net_balance:,.4f} OM")
                 
-                # Styling Helper
+                # --- STYLING ---
                 def highlight_row(val):
                     if val == 'Inflow':
                         return 'color: #00c853; font-weight: bold' 
@@ -127,7 +127,7 @@ if st.button("Fetch Transactions"):
                         return 'color: #d50000; font-weight: bold'
                     return ''
 
-                # Display Table with requested order
+                # --- TABLE DISPLAY ---
                 st.dataframe(
                     df.style.map(highlight_row, subset=['Direction'])
                       .format({
@@ -142,7 +142,7 @@ if st.button("Fetch Transactions"):
                     use_container_width=True
                 )
                 
-                # Download Button (Convert numbers to strings for CSV)
+                # --- DOWNLOAD ---
                 csv_df = df.copy()
                 csv = csv_df.to_csv(index=False).encode('utf-8')
                 
