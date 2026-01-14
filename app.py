@@ -9,7 +9,7 @@ st.set_page_config(page_title="Mantra Transaction Explorer", layout="wide")
 st.title("Mantra Blockchain Transaction Explorer")
 st.markdown("""
 This app fetches **Coin Balance History** directly from the Mantra Chain API.
-It is faster, more reliable, and does not crash.
+**Note:** If the API does not provide a specific timestamp, the **Block Number** is shown as the reference.
 """)
 
 # --- Input Section ---
@@ -21,8 +21,7 @@ wallet_address = st.text_input(
 
 # --- API Fetch Function ---
 def fetch_mantra_data(address):
-    # We use the Blockscout v2 API endpoint for coin balance history
-    # This matches the data shown in the "Coin Balance History" tab on the website
+    # Endpoint for coin balance history
     api_url = f"https://blockscout.mantrascan.io/api/v2/addresses/{address}/coin-balance-history"
     
     try:
@@ -34,8 +33,6 @@ def fetch_mantra_data(address):
             return f"Error: API returned status code {response.status_code}"
             
         data = response.json()
-        
-        # The API returns a list of items in the 'items' key
         items = data.get('items', [])
         
         if not items:
@@ -51,17 +48,24 @@ def fetch_mantra_data(address):
             txn_hash = item.get('transaction_hash')
             txn_link = f"https://blockscout.mantrascan.io/tx/{txn_hash}" if txn_hash else ""
             
-            # 3. Timestamp (API gives ISO format or raw timestamp, we format it)
-            raw_time = item.get('timestamp')
-            try:
-                # Convert ISO string to readable date "Jan 8, 2026 1:38 PM"
-                dt_obj = datetime.fromisoformat(raw_time.replace('Z', '+00:00'))
-                timestamp = dt_obj.strftime("%b %d, %Y %I:%M %p")
-            except:
-                timestamp = raw_time
+            # 3. Timestamp Logic (Robust)
+            # We try multiple keys that Blockscout sometimes uses
+            raw_time = item.get('timestamp') or item.get('block_timestamp') or item.get('time')
+            
+            if raw_time:
+                try:
+                    # Try parsing ISO format (e.g., 2026-01-08T13:38:00.000000Z)
+                    dt_obj = datetime.fromisoformat(str(raw_time).replace('Z', '+00:00'))
+                    timestamp = dt_obj.strftime("%b %d, %Y %I:%M %p")
+                except:
+                    # If parsing fails, just use the raw string
+                    timestamp = str(raw_time)
+            else:
+                # Fallback: If API returns no time, show Block Number
+                timestamp = f"Block #{block}"
 
             # 4. Values (Amount & Balance)
-            # The API returns values in 'Wei' (raw integer), so we divide by 10^18 for OM
+            # The API returns values in 'Wei', divide by 1e18 for OM
             try:
                 raw_value = float(item.get('value', 0)) / 1e18
                 raw_delta = float(item.get('delta', 0)) / 1e18
@@ -82,8 +86,8 @@ def fetch_mantra_data(address):
                 "Txn Link": txn_link,
                 "Timestamp": timestamp,
                 "Direction": direction,
-                "Amount": f"{raw_delta:,.8f}", # Formatted with commas
-                "Running Balance OM": f"{raw_value:,.8f}"
+                "Amount": raw_delta,           # Keep as number for sorting/styling
+                "Running Balance OM": raw_value # Keep as number for sorting/styling
             })
             
         return pd.DataFrame(processed_data)
@@ -124,18 +128,24 @@ if st.button("Fetch Transactions"):
                     return ''
 
                 # Display Table with requested order
-                # Block → Txn Hash → Txn Link → Timestamp → Direction → Amount → Running Balance OM
                 st.dataframe(
-                    df.style.map(highlight_row, subset=['Direction']),
+                    df.style.map(highlight_row, subset=['Direction'])
+                      .format({
+                          "Amount": "{:,.8f}", 
+                          "Running Balance OM": "{:,.8f}"
+                      }),
                     column_config={
                         "Txn Link": st.column_config.LinkColumn("Txn Link"),
-                        "Block": st.column_config.NumberColumn("Block", format="%d")
+                        "Block": st.column_config.NumberColumn("Block", format="%d"),
+                        "Timestamp": st.column_config.TextColumn("Timestamp"),
                     },
                     use_container_width=True
                 )
                 
-                # Download Button
-                csv = df.to_csv(index=False).encode('utf-8')
+                # Download Button (Convert numbers to strings for CSV)
+                csv_df = df.copy()
+                csv = csv_df.to_csv(index=False).encode('utf-8')
+                
                 st.download_button(
                     label="Download CSV",
                     data=csv,
