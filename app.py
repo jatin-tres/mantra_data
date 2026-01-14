@@ -8,7 +8,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException
 
 # --- Page Config ---
 st.set_page_config(page_title="Mantra Explorer Scraper", layout="wide")
@@ -16,7 +16,7 @@ st.set_page_config(page_title="Mantra Explorer Scraper", layout="wide")
 st.title("Mantra Blockchain Transaction Scraper")
 st.markdown("""
 This app scrapes 'Coin Balance History' from the Mantra Explorer. 
-It automatically toggles the timestamp format and categorizes transactions as **Inflow** or **Outflow**.
+It toggles the timestamp to Date format and categorizes Inflow/Outflow.
 """)
 
 # --- Input Section ---
@@ -28,170 +28,188 @@ wallet_address = st.text_input(
 
 # --- Selenium Scraper Function ---
 def scrape_mantra_data(address):
+    # 1. Setup Chrome Options
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
     
-    # CRITICAL FIX FOR CLOUD: Point to system-installed Chromium
-    # Streamlit Cloud installs chromium at /usr/bin/chromium or /usr/bin/chromium-browser
+    # Auto-detect binary location for Streamlit Cloud vs Local
     if os.path.exists("/usr/bin/chromium"):
         options.binary_location = "/usr/bin/chromium"
     elif os.path.exists("/usr/bin/chromium-browser"):
         options.binary_location = "/usr/bin/chromium-browser"
 
+    # Setup Service
     service = None
-    # Use system chromedriver if available (standard in Streamlit Cloud via packages.txt)
     if os.path.exists("/usr/bin/chromedriver"):
         service = Service("/usr/bin/chromedriver")
     else:
-        # Fallback for local testing (Mac/Windows)
         try:
             from webdriver_manager.chrome import ChromeDriverManager
             service = Service(ChromeDriverManager().install())
         except:
-            st.error("Could not find Chromedriver. Please ensure packages.txt is present.")
+            st.error("Chromedriver not found. If on Cloud, ensure 'packages.txt' contains 'chromium-driver'.")
             return None
 
+    driver = None
     try:
         driver = webdriver.Chrome(service=service, options=options)
-    except Exception as e:
-        st.error(f"Failed to start browser: {e}")
-        return None
-
-    # 2. Construct URL
-    url = f"https://blockscout.mantrascan.io/address/{address}?tab=coin_balance_history"
-    
-    status_placeholder = st.empty()
-    status_placeholder.info(f"Navigating to {url}...")
-    
-    try:
+        
+        # 2. Navigate
+        url = f"https://blockscout.mantrascan.io/address/{address}?tab=coin_balance_history"
+        status_placeholder = st.empty()
+        status_placeholder.info(f"Navigating to {url}...")
+        
         driver.get(url)
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 25) # Increased wait time
+
+        # 3. Wait for Table
+        status_placeholder.info("Waiting for table data to load...")
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
         
-        # 3. Wait for table
-        status_placeholder.info("Waiting for table data...")
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-        
-        # 4. Toggle Timestamp (Clock Click)
+        # 4. Toggle Timestamp (Age -> Date)
         try:
-            status_placeholder.info("Toggling timestamp format...")
-            # Look for the SVG icon specifically inside the 'Timestamp' table header
-            # We use a broad XPath to find the 'th' with 'Timestamp' and click any clickable element inside it
+            status_placeholder.info("Switching timestamp to Date format...")
+            # Target the SVG specifically inside the 'Timestamp' header
             toggle_btn = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//th[contains(., 'Timestamp')]//*[local-name()='svg' or local-name()='button']")
+                (By.XPATH, "//th[contains(., 'Timestamp')]//*[local-name()='svg']")
             ))
-            driver.execute_script("arguments[0].click();", toggle_btn)
-            time.sleep(2) # Allow UI to update
-        except TimeoutException:
-            st.warning("Timestamp toggle button not found. Using default time format.")
+            # Javascript click is more robust for SVGs
+            driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {view: window, bubbles:true, cancelable: true}))", toggle_btn)
+            time.sleep(2) # Wait for text update
+        except Exception as e:
+            st.warning(f"Note: Timestamp toggle might have failed or is already in correct format. ({e})")
 
         # 5. Extract Data
-        status_placeholder.info("Extracting rows...")
+        status_placeholder.info("Extracting data...")
+        
+        # Re-fetch rows to ensure we get the updated DOM
         rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
         
         data = []
         
         for row in rows:
             cols = row.find_elements(By.TAG_NAME, "td")
-            if len(cols) < 5: continue
             
-            # -- Block --
-            block = cols[0].text
+            # Ensure row has enough columns (Block, Txn, Timestamp, Balance, Delta)
+            if len(cols) < 5:
+                continue
+
+            # --- ROBUST EXTRACTION USING textContent ---
+            # .text can be empty if element is "hidden" in headless mode. 
+            # .get_attribute("textContent") forces retrieval of the raw text.
             
-            # -- Txn (Link extraction) --
+            # Col 0: Block
+            block = cols[0].get_attribute("textContent").strip()
+            
+            # Col 1: Txn
+            # Try to get link, fallback to text
             try:
                 txn_elem = cols[1].find_element(By.TAG_NAME, "a")
-                txn_hash = txn_elem.text
+                txn_hash = txn_elem.get_attribute("textContent").strip()
                 txn_link = txn_elem.get_attribute("href")
             except:
-                txn_hash = cols[1].text
+                txn_hash = cols[1].get_attribute("textContent").strip()
                 txn_link = ""
 
-            # -- Timestamp --
-            timestamp = cols[2].text
+            # Col 2: Timestamp
+            timestamp = cols[2].get_attribute("textContent").strip()
             
-            # -- Balance --
-            balance = cols[3].text
+            # Col 3: Balance
+            balance = cols[3].get_attribute("textContent").strip()
             
-            # -- Delta (Inflow/Outflow Logic) --
+            # Col 4: Delta (Inflow/Outflow)
             delta_cell = cols[4]
-            delta_text = delta_cell.text
+            delta_text = delta_cell.get_attribute("textContent").strip()
             
-            # Determine Direction based on text (+/-) AND color if possible
-            # We check the HTML class for 'success' (green) or 'danger' (red) clues
-            cell_html = delta_cell.get_attribute('innerHTML')
-            cell_class = delta_cell.get_attribute('class')
+            # Determine Direction
+            # Logic: Check for '+' or '-' in text first.
+            # Secondary check: Check class names for 'text-success' (green) or 'text-danger' (red)
+            direction = "Neutral"
+            cell_html = delta_cell.get_attribute('outerHTML')
             
-            direction = "Unknown"
-            
-            # Priority 1: Check for explicit plus/minus in text
             if "+" in delta_text:
                 direction = "Inflow"
             elif "-" in delta_text:
                 direction = "Outflow"
-            else:
-                # Priority 2: Check standard color classes used by blockscout
-                # 'text-success' is usually green, 'text-danger' is usually red
-                if "success" in cell_html or "green" in cell_html:
-                    direction = "Inflow"
-                elif "danger" in cell_html or "error" in cell_html or "red" in cell_html:
-                    direction = "Outflow"
-                else:
-                    direction = "Neutral"
+            elif "text-success" in cell_html or "color: green" in cell_html:
+                direction = "Inflow"
+            elif "text-danger" in cell_html or "color: red" in cell_html:
+                direction = "Outflow"
 
-            data.append({
-                "Block": block,
-                "Txn Hash": txn_hash,
-                "Txn Link": txn_link,
-                "Timestamp": timestamp,
-                "Balance OM": balance,
-                "Delta": delta_text,
-                "Direction": direction
-            })
-            
-        status_placeholder.success(f"Success! Scraped {len(data)} transactions.")
+            # Only add if we actually found data (skip empty rows if any)
+            if block or txn_hash:
+                data.append({
+                    "Block": block,
+                    "Txn Hash": txn_hash,
+                    "Txn Link": txn_link,
+                    "Timestamp": timestamp,
+                    "Balance OM": balance,
+                    "Delta": delta_text,
+                    "Direction": direction
+                })
+        
+        status_placeholder.success(f"Successfully scraped {len(data)} transactions!")
         return pd.DataFrame(data)
 
     except Exception as e:
-        st.error(f"Scraping failed: {e}")
+        st.error(f"An error occurred: {e}")
         return None
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
 
 # --- Main Execution ---
 if st.button("Fetch Transactions"):
     if not wallet_address:
         st.warning("Please enter a wallet address.")
     else:
-        with st.spinner("Initializing scraper..."):
+        with st.spinner("Processing..."):
             df = scrape_mantra_data(wallet_address)
             
             if df is not None and not df.empty:
-                # Metrics
-                inflow_c = len(df[df['Direction'] == 'Inflow'])
-                outflow_c = len(df[df['Direction'] == 'Outflow'])
+                # Summary Metrics
+                inflow_count = len(df[df['Direction'] == 'Inflow'])
+                outflow_count = len(df[df['Direction'] == 'Outflow'])
                 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Total Txns", len(df))
-                c2.metric("Inflow (Green)", inflow_c)
-                c3.metric("Outflow (Red)", outflow_c)
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total Transactions", len(df))
+                col2.metric("Inflows (Green)", inflow_count)
+                col3.metric("Outflows (Red)", outflow_count)
                 
-                # Styling
-                def highlight_dir(val):
-                    if val == 'Inflow': return 'color: green; font-weight: bold'
-                    if val == 'Outflow': return 'color: red; font-weight: bold'
+                # Style Helper
+                def highlight_row(val):
+                    if val == 'Inflow':
+                        return 'color: #00c853; font-weight: bold' # Green
+                    elif val == 'Outflow':
+                        return 'color: #d50000; font-weight: bold' # Red
                     return ''
 
+                st.subheader("Transaction Details")
                 st.dataframe(
-                    df.style.map(highlight_dir, subset=['Direction']),
-                    column_config={"Txn Link": st.column_config.LinkColumn("Txn Link")},
+                    df.style.map(highlight_row, subset=['Direction']),
+                    column_config={
+                        "Txn Link": st.column_config.LinkColumn("Txn Link"),
+                        "Txn Hash": "Txn Hash",
+                        "Block": "Block",
+                        "Timestamp": "Timestamp",
+                        "Balance OM": "Balance OM",
+                        "Delta": "Delta",
+                        "Direction": "Direction"
+                    },
                     use_container_width=True
                 )
                 
                 # Download
-                csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button("Download CSV", csv, "mantra_data.csv", "text/csv")
+                csv_data = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download CSV",
+                    data=csv_data,
+                    file_name=f"mantra_txns_{wallet_address[:6]}.csv",
+                    mime="text/csv"
+                )
             else:
-                st.warning("No data found.")
+                st.error("No data found. The page might have changed or the wallet has no history.")
