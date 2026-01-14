@@ -2,13 +2,13 @@ import streamlit as st
 import pandas as pd
 import time
 import os
+import re
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
 
 # --- Page Config ---
 st.set_page_config(page_title="Mantra Explorer Scraper", layout="wide")
@@ -16,7 +16,7 @@ st.set_page_config(page_title="Mantra Explorer Scraper", layout="wide")
 st.title("Mantra Blockchain Transaction Scraper")
 st.markdown("""
 This app scrapes 'Coin Balance History' from the Mantra Explorer. 
-It toggles the timestamp to Date format and categorizes Inflow/Outflow.
+It automatically toggles the timestamp format and categorizes transactions based on the Amount (+/-).
 """)
 
 # --- Input Section ---
@@ -64,24 +64,24 @@ def scrape_mantra_data(address):
         status_placeholder.info(f"Navigating to {url}...")
         
         driver.get(url)
-        wait = WebDriverWait(driver, 25) # Increased wait time
+        wait = WebDriverWait(driver, 25)
 
-        # 3. Wait for Table
-        status_placeholder.info("Waiting for table data to load...")
+        # 3. Wait for Table to Load
+        status_placeholder.info("Waiting for table data...")
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
         
         # 4. Toggle Timestamp (Age -> Date)
         try:
-            status_placeholder.info("Switching timestamp to Date format...")
+            status_placeholder.info("Toggling timestamp format...")
             # Target the SVG specifically inside the 'Timestamp' header
             toggle_btn = wait.until(EC.element_to_be_clickable(
                 (By.XPATH, "//th[contains(., 'Timestamp')]//*[local-name()='svg']")
             ))
-            # Javascript click is more robust for SVGs
+            # Javascript click is reliable for SVGs
             driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {view: window, bubbles:true, cancelable: true}))", toggle_btn)
             time.sleep(2) # Wait for text update
         except Exception as e:
-            st.warning(f"Note: Timestamp toggle might have failed or is already in correct format. ({e})")
+            st.warning("Note: Could not toggle timestamp. It might already be in Date format.")
 
         # 5. Extract Data
         status_placeholder.info("Extracting data...")
@@ -94,63 +94,70 @@ def scrape_mantra_data(address):
         for row in rows:
             cols = row.find_elements(By.TAG_NAME, "td")
             
-            # Ensure row has enough columns (Block, Txn, Timestamp, Balance, Delta)
+            # Ensure row has enough columns
             if len(cols) < 5:
                 continue
 
-            # --- ROBUST EXTRACTION USING textContent ---
-            # .text can be empty if element is "hidden" in headless mode. 
-            # .get_attribute("textContent") forces retrieval of the raw text.
-            
-            # Col 0: Block
+            # -- Col 0: Block --
             block = cols[0].get_attribute("textContent").strip()
             
-            # Col 1: Txn
-            # Try to get link, fallback to text
+            # -- Col 1 & 2: Txn Link & FULL HASH --
+            # We get the link first, then extract the hash from the link URL
             try:
                 txn_elem = cols[1].find_element(By.TAG_NAME, "a")
-                txn_hash = txn_elem.get_attribute("textContent").strip()
                 txn_link = txn_elem.get_attribute("href")
+                
+                # Logic: Extract Hash from Link (e.g., .../tx/0x123...)
+                if "/tx/" in txn_link:
+                    # Splits by '/tx/' and takes the last part (the hash)
+                    txn_hash = txn_link.split("/tx/")[-1]
+                else:
+                    # Fallback if link format is unexpected
+                    txn_hash = txn_elem.get_attribute("textContent").strip()
             except:
                 txn_hash = cols[1].get_attribute("textContent").strip()
                 txn_link = ""
 
-            # Col 2: Timestamp
+            # -- Col 3: Timestamp --
             timestamp = cols[2].get_attribute("textContent").strip()
             
-            # Col 3: Balance
+            # -- Col 4: Balance --
             balance = cols[3].get_attribute("textContent").strip()
             
-            # Col 4: Delta (Inflow/Outflow)
+            # -- Col 5: Amount (formerly Delta) & Direction Logic --
             delta_cell = cols[4]
-            delta_text = delta_cell.get_attribute("textContent").strip()
+            raw_delta_text = delta_cell.get_attribute("textContent").strip()
             
-            # Determine Direction
-            # Logic: Check for '+' or '-' in text first.
-            # Secondary check: Check class names for 'text-success' (green) or 'text-danger' (red)
+            # Cleaning the amount string: remove commas, currency text, keep only numbers, dots and minus sign
+            # Regex removes anything that is NOT a digit, a dot, or a minus sign
+            clean_amount_str = re.sub(r'[^\d.-]', '', raw_delta_text)
+            
             direction = "Neutral"
-            cell_html = delta_cell.get_attribute('outerHTML')
+            amount_val = 0.0
             
-            if "+" in delta_text:
-                direction = "Inflow"
-            elif "-" in delta_text:
-                direction = "Outflow"
-            elif "text-success" in cell_html or "color: green" in cell_html:
-                direction = "Inflow"
-            elif "text-danger" in cell_html or "color: red" in cell_html:
-                direction = "Outflow"
+            try:
+                amount_val = float(clean_amount_str)
+                
+                # Requested Logic: < 0 is Outflow, > 0 is Inflow
+                if amount_val < 0:
+                    direction = "Outflow"
+                elif amount_val > 0:
+                    direction = "Inflow"
+                else:
+                    direction = "Neutral"
+            except ValueError:
+                # Keep neutral if conversion fails
+                pass
 
-            # Only add if we actually found data (skip empty rows if any)
-            if block or txn_hash:
-                data.append({
-                    "Block": block,
-                    "Txn Hash": txn_hash,
-                    "Txn Link": txn_link,
-                    "Timestamp": timestamp,
-                    "Balance OM": balance,
-                    "Delta": delta_text,
-                    "Direction": direction
-                })
+            data.append({
+                "Block": block,
+                "Txn Hash": txn_hash,  # Now the Full Hash
+                "Txn Link": txn_link,
+                "Timestamp": timestamp,
+                "Balance OM": balance,
+                "Amount": raw_delta_text, # Renamed from Delta
+                "Direction": direction
+            })
         
         status_placeholder.success(f"Successfully scraped {len(data)} transactions!")
         return pd.DataFrame(data)
@@ -197,7 +204,7 @@ if st.button("Fetch Transactions"):
                         "Block": "Block",
                         "Timestamp": "Timestamp",
                         "Balance OM": "Balance OM",
-                        "Delta": "Delta",
+                        "Amount": "Amount",
                         "Direction": "Direction"
                     },
                     use_container_width=True
