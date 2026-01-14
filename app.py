@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import os
 import re
+import sys
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -22,27 +23,28 @@ It automatically toggles the timestamp format and categorizes transactions based
 # --- Input Section ---
 wallet_address = st.text_input(
     "Enter Wallet Address", 
-    value="0x2BDfe9E28802b663040aC8Bb2563dd40cF3afef5",
+    value="",
     help="Paste the Mantra wallet address here."
 )
 
 # --- Selenium Scraper Function ---
 def scrape_mantra_data(address):
-    # 1. Setup Chrome Options
+    # 1. Setup Chrome Options (Aggressive Memory Saving)
     options = Options()
-    options.add_argument("--headless")
+    options.add_argument("--headless=new") # Newer, more stable headless mode
     options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-dev-shm-usage") # Overcome limited resource problems
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-features=VizDisplayCompositor") # Disable visual rendering to save RAM
+    options.add_argument("--disable-extensions")
     options.add_argument("--window-size=1920,1080")
     
-    # Auto-detect binary location for Streamlit Cloud vs Local
+    # Auto-detect binary location
     if os.path.exists("/usr/bin/chromium"):
         options.binary_location = "/usr/bin/chromium"
     elif os.path.exists("/usr/bin/chromium-browser"):
         options.binary_location = "/usr/bin/chromium-browser"
 
-    # Setup Service
     service = None
     if os.path.exists("/usr/bin/chromedriver"):
         service = Service("/usr/bin/chromedriver")
@@ -57,17 +59,18 @@ def scrape_mantra_data(address):
     driver = None
     try:
         driver = webdriver.Chrome(service=service, options=options)
+        driver.set_page_load_timeout(60) # Prevent hanging forever
         
-        # 2. Navigate (Silent)
+        # 2. Navigate
         url = f"https://blockscout.mantrascan.io/address/{address}?tab=coin_balance_history"
         driver.get(url)
         
-        wait = WebDriverWait(driver, 25)
+        wait = WebDriverWait(driver, 20)
 
-        # 3. Wait for Table (Silent)
+        # 3. Wait for Table
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
         
-        # 4. Toggle Timestamp (Silent)
+        # 4. Toggle Timestamp
         try:
             # Target the SVG specifically inside the 'Timestamp' header
             toggle_btn = wait.until(EC.element_to_be_clickable(
@@ -75,13 +78,11 @@ def scrape_mantra_data(address):
             ))
             # Javascript click is reliable for SVGs
             driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {view: window, bubbles:true, cancelable: true}))", toggle_btn)
-            time.sleep(2) # Wait for text update
+            time.sleep(1.5) # Short wait for update
         except Exception:
-            # Fail silently on toggle if it doesn't work (data will still load)
             pass
 
         # 5. Extract Data
-        # Re-fetch rows
         rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
         
         data = []
@@ -89,7 +90,6 @@ def scrape_mantra_data(address):
         for row in rows:
             cols = row.find_elements(By.TAG_NAME, "td")
             
-            # Ensure row has enough columns
             if len(cols) < 5:
                 continue
 
@@ -161,61 +161,76 @@ def scrape_mantra_data(address):
         return df
 
     except Exception as e:
-        st.error(f"An error occurred: {e}")
-        return None
+        # Catch unexpected crashes and return the error so we don't get a white screen
+        return f"Error: {str(e)}"
     finally:
+        # CRITICAL: Always close driver to free RAM
         if driver:
-            driver.quit()
+            try:
+                driver.quit()
+            except:
+                pass
 
 # --- Main Execution ---
 if st.button("Fetch Transactions"):
     if not wallet_address:
         st.warning("Please enter a wallet address.")
     else:
-        # Only showing "Processing..." as requested
-        with st.spinner("Processing..."):
-            df = scrape_mantra_data(wallet_address)
-            
-            if df is not None and not df.empty:
-                # Summary Metrics
-                inflow_count = len(df[df['Direction'] == 'Inflow'])
-                outflow_count = len(df[df['Direction'] == 'Outflow'])
+        # Catch-all try/except block for the entire UI rendering to prevent White Screen
+        try:
+            with st.spinner("Processing..."):
+                result = scrape_mantra_data(wallet_address)
                 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Total Transactions", len(df))
-                col2.metric("Inflows (Green)", inflow_count)
-                col3.metric("Outflows (Red)", outflow_count)
+                # Check if result is an error string or a DataFrame
+                if isinstance(result, str) and result.startswith("Error"):
+                    st.error(f"Scraping failed: {result}")
                 
-                # Style Helper
-                def highlight_row(val):
-                    if val == 'Inflow':
-                        return 'color: #00c853; font-weight: bold' 
-                    elif val == 'Outflow':
-                        return 'color: #d50000; font-weight: bold'
-                    return ''
+                elif isinstance(result, pd.DataFrame) and not result.empty:
+                    df = result
+                    
+                    # Summary Metrics
+                    inflow_count = len(df[df['Direction'] == 'Inflow'])
+                    outflow_count = len(df[df['Direction'] == 'Outflow'])
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Total Transactions", len(df))
+                    col2.metric("Inflows (Green)", inflow_count)
+                    col3.metric("Outflows (Red)", outflow_count)
+                    
+                    # Style Helper
+                    def highlight_row(val):
+                        if val == 'Inflow':
+                            return 'color: #00c853; font-weight: bold' 
+                        elif val == 'Outflow':
+                            return 'color: #d50000; font-weight: bold'
+                        return ''
 
-                st.subheader("Transaction Details")
-                st.dataframe(
-                    df.style.map(highlight_row, subset=['Direction']),
-                    column_config={
-                        "Txn Link": st.column_config.LinkColumn("Txn Link"),
-                        "Txn Hash": "Txn Hash",
-                        "Block": "Block",
-                        "Timestamp": "Timestamp",
-                        "Direction": "Direction",
-                        "Amount": "Amount",
-                        "Running Balance OM": "Running Balance OM"
-                    },
-                    use_container_width=True
-                )
-                
-                # Download
-                csv_data = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Download CSV",
-                    data=csv_data,
-                    file_name=f"mantra_txns_{wallet_address[:6]}.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.error("No data found.")
+                    st.subheader("Transaction Details")
+                    
+                    # Using standard dataframe first to ensure data is valid, then styled
+                    st.dataframe(
+                        df.style.map(highlight_row, subset=['Direction']),
+                        column_config={
+                            "Txn Link": st.column_config.LinkColumn("Txn Link"),
+                            "Txn Hash": "Txn Hash",
+                            "Block": "Block",
+                            "Timestamp": "Timestamp",
+                            "Direction": "Direction",
+                            "Amount": "Amount",
+                            "Running Balance OM": "Running Balance OM"
+                        },
+                        use_container_width=True
+                    )
+                    
+                    # Download
+                    csv_data = df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv_data,
+                        file_name=f"mantra_txns_{wallet_address[:6]}.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.warning("No data found or scraping returned empty.")
+        except Exception as e:
+            st.error(f"Critical Application Error: {e}")
