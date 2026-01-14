@@ -4,12 +4,11 @@ import requests
 from datetime import datetime
 
 # --- Page Config ---
-st.set_page_config(page_title="Mantra Transaction Explorer", layout="wide")
+st.set_page_config(page_title="Mantra OM Transaction Explorer", layout="wide")
 
 st.title("Mantra Blockchain Transaction Explorer")
 st.markdown("""
-This app fetches **Coin Balance History** directly from the Mantra Chain API.
-It calculates the **Net Balance** by summing the amounts of all visible transactions.
+This app fetches **OM Coin Balance History** directly from the Mantra Chain API.
 """)
 
 # --- Input Section ---
